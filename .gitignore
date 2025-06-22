@@ -1,0 +1,10 @@
+# Conda artefacts
+*.lock
+*.conda
+.conda_envs/
+
+# VS Code settings
+.vscode/
+
+# Data never published
+data/
