@@ -6,6 +6,11 @@ def parse_id(fname: str):
     Return (user, session, sample, label) from 'u1001_s0001_sg0003.mat'
     label ∈ {'genuine','skilled'}
     """
-    u, s, g = map(int, ID_RE.match(fname).groups())
-    label = "genuine" if g in (1,2,6,7) else "skilled"
+    m = ID_RE.search(str(fname))
+    if not m:
+        raise ValueError(
+            f"Filename {fname!r} does not match 'u####_s####_sg####' pattern"
+        )
+    u, s, g = map(int, m.groups())
+    label = "genuine" if g in (1, 2, 6, 7) else "skilled"
     return u, s, g, label
