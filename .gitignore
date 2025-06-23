@@ -8,3 +8,6 @@
 
 # Data never published
 data/
+
+# Python bytecode
+__pycache__/
