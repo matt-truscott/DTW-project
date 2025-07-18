@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - ExplorationV1   # add your feature branch here
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Check out your repo
+      - uses: actions/checkout@v4
+
+      # 2) Set up Miniconda with your environment.yml
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          environment-file: environment.yml
+          activate-environment: dtw-project
+          python-version: 3.11
+
+      # 3) (Optional) Upgrade pip / install any extra pip-only packages
+      - name: Install extra pip packages
+        run: |
+          pip install --upgrade pip
+          # pip install some-other-package
+
+      # 4) Run your tests
+      - name: Run pytest
+        run: pytest -q
