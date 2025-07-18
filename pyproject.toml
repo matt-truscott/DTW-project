@@ -6,3 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "dtwproject"
 version = "0.1.0"
 requires-python = ">=3.11"
+authors = [
+    { name = "Matt T", email = "matt@example.com" }
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "h5py",
+]
+
+[tool.setuptools]
+package-dir = { "dtwproject" = "src" }
+packages = ["dtwproject"]
