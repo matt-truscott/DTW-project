@@ -28,7 +28,7 @@ jobs:
       - name: Install extra pip packages
         run: |
           pip install --upgrade pip
-          # pip install some-other-package
+          pip install -e
 
       # 4) Run your tests
       - name: Run pytest

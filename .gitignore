@@ -6,8 +6,8 @@
 # VS Code settings
 .vscode/
 
-# Data never published
-data/
+# Only ignore the project’s root data/ folder
+/data/
 
 # Python bytecode
 __pycache__/

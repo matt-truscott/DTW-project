@@ -6,13 +6,15 @@ import scipy.io as sio
 from src.displayData import inspect_mat_file
 from src.dtwAlgorithm import dp
 
-# helper to get full path under tests/data
+# helper to construct file paths under tests/data (if present)
 HERE = os.path.dirname(__file__)
 def data_path(*parts):
     return os.path.join(HERE, "data", *parts)
 
 def test_inspect_global_vector(tmp_path):
-    mat_path = data_path("GlobalFeatures", "u0001s0001_sg0001.mat")
+    mat_path = tmp_path / "global.mat"
+    vec = np.linspace(0.0, 1.0, 40)
+    sio.savemat(mat_path, {"globalFeatures": vec})
     feats = inspect_mat_file(mat_path)
 
     # should return exactly one key: globalFeatures
@@ -24,7 +26,9 @@ def test_inspect_global_vector(tmp_path):
     np.testing.assert_allclose(vec[-1], 1.0)
 
 def test_inspect_local_matrix(tmp_path):
-    mat_path = data_path("LocalFunctions", "u0001s0001_sg0001.mat")
+    mat_path = tmp_path / "local.mat"
+    mat = np.arange(45).reshape(5, 9)
+    sio.savemat(mat_path, {"localFunctions": mat})
     feats = inspect_mat_file(mat_path)
 
     assert "localFunctions" in feats
