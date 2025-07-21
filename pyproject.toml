@@ -14,9 +14,6 @@ dependencies = [
     "scipy",
     "matplotlib",
     "h5py",
-    "pandas",
-    "scikit-learn",
-    "pyarrow",
 ]
 
 [tool.setuptools]
