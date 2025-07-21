@@ -69,6 +69,50 @@ print('Final cost:', cost[-1, -1])
 python src/importData.py
 ```
 
+## Data Organization
+
+All of the BiosecurID signature features reside under a top-level `data/` folder
+(ignored by git for size). It is split into two branches:
+
+```
+data/
+├── raw/
+│   └── LocalFunctions/
+│       └── uXXXXsYYYY_sgZZZZ.mat      # variable-length L×9 time-functions
+└── processed/
+    └── GlobalFeatures/
+        └── uXXXXsYYYY_sgZZZZ.mat      # fixed-length 1×40 global feature vector
+```
+
+### `raw/LocalFunctions`
+Each `.mat` file stores an `nSamples×9` matrix called `localFunctions`
+containing the nine selected time-series:
+
+1. x-coordinate
+2. y-coordinate
+3. pen pressure
+4. tangent angle
+5. velocity
+6. log-curvature
+7. acceleration
+8. Δx/Δt
+9. Δy/Δt
+
+### `processed/GlobalFeatures`
+Each `.mat` file stores a 40-dimensional vector named `globalFeatures` that
+summarises an entire signature (duration, speed statistics, geometry, pressure
+statistics, etc.).
+
+### File naming convention
+All files follow the pattern `uXXXXsYYYY_sgZZZZ.mat`, where:
+
+- `XXXX` → user ID (e.g. `1001`)
+- `YYYY` → session ID (e.g. `0001`)
+- `ZZZZ` → sample number (e.g. `0001`)
+
+Signatures 1, 2, 6 and 7 of each session are genuine, while 3, 4 and 5 are
+skilled forgeries.
+
 ## Project structure
 
 - `src/` – DTW implementation and data utilities
