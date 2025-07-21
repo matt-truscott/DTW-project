@@ -17,12 +17,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # 2) Set up Miniconda with your environment.yml
-      - uses: conda-incubator/setup-miniconda@v2
+      - uses: conda-incubator/setup-miniconda@v3
         with:
-          auto-update-conda: true
-          environment-file: environment.yml
-          activate-environment: DTW-project
-          python-version: 3.11
+          environment-file: environment.yml        # builds & caches env
+        activate-environment: DTW-project        # auto‑activates in later steps
+        python-version: "3.11"
+        channels: conda-forge                    # optional but explicit
+        auto-update-conda: true
 
       # 3) (Optional) Upgrade pip / install any extra pip-only packages
       - name: Install extra pip packages
