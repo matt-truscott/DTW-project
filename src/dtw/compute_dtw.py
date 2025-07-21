@@ -1,0 +1,181 @@
+"""Utilities for computing DTW distances and caching results."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable, Tuple
+
+import numpy as np
+import pandas as pd
+from scipy.spatial.distance import cdist
+import pyarrow.parquet as pq
+
+try:
+    from dtaidistance import dtw_ndim
+    _HAVE_DTAI = True
+except Exception:  # pragma: no cover - optional dependency
+    _HAVE_DTAI = False
+
+try:  # pragma: no cover - optional dependency
+    import dtw_python_cuda as _dtw_cuda  # type: ignore
+    _HAVE_CUDA = True
+except Exception:  # pragma: no cover - optional dependency
+    _HAVE_CUDA = False
+
+from ..dtwAlgorithm import dp
+from ..io.load_biosecurid import load_local
+
+
+Backend = str
+
+
+def _select_backend(preferred: Backend | None = None) -> Backend:
+    """Select an available DTW backend."""
+    if preferred == "cuda" and _HAVE_CUDA:
+        return "cuda"
+    if preferred in {"dtaidistance", None} and _HAVE_DTAI:
+        return "dtaidistance"
+    return "python"
+
+
+def compute_pair_dtw(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    backend: Backend | None = None,
+) -> Tuple[float, float, float, float, int]:
+    """Compute DTW distance and normalised scores for two feature matrices.
+
+    Parameters
+    ----------
+    a, b : ndarray shape (n_samples, n_features)
+        Signature feature matrices.
+    backend : {{'cuda', 'dtaidistance', 'python', None}}, optional
+        Which DTW backend to use. ``None`` selects the best available option.
+
+    Returns
+    -------
+    d_raw : float
+        Accumulated DTW cost.
+    d_norm1 : float
+        Cost divided by path length.
+    d_norm2 : float
+        Cost divided by the sum of sequence lengths.
+    d_norm3 : float
+        Cost divided by the max of the sequence lengths.
+    path_len : int
+        Length of the optimal warping path.
+    """
+    backend = _select_backend(backend)
+
+    if backend == "cuda":  # pragma: no cover - requires optional dependency
+        dist, cost = _dtw_cuda.warping_paths(a.astype(float), b.astype(float))
+        path = _dtw_cuda.warping_path(a.astype(float), b.astype(float))
+        d_raw = float(cost[-1, -1])
+        path_len = len(path)
+    elif backend == "dtaidistance":  # pragma: no cover - requires optional dependency
+        x = a.astype(float).T
+        y = b.astype(float).T
+        _, cost = dtw_ndim.warping_paths_fast(x, y)
+        path = dtw_ndim.warping_path(x, y)
+        d_raw = float(cost[-1, -1])
+        path_len = len(path)
+    else:
+        dist_mat = cdist(a, b)
+        path, cost = dp(dist_mat)
+        d_raw = float(cost[-1, -1])
+        path_len = len(path)
+
+    n_a = len(a)
+    n_b = len(b)
+    d_norm1 = d_raw / path_len if path_len else float("inf")
+    d_norm2 = d_raw / (n_a + n_b)
+    d_norm3 = d_raw / max(n_a, n_b)
+    return d_raw, d_norm1, d_norm2, d_norm3, int(path_len)
+
+
+def _append_records(records: Iterable[dict], cache_path: Path) -> None:
+    """Append records to a Parquet cache."""
+    df = pd.DataFrame.from_records(records)
+    if cache_path.exists():
+        existing = pd.read_parquet(cache_path)
+        df = pd.concat([existing, df], ignore_index=True)
+    df.to_parquet(cache_path, index=False)
+
+
+def build_cache(
+    pairs_path: Path,
+    catalog_path: Path,
+    cache_path: Path,
+    *,
+    chunk_size: int = 10_000,
+    backend: Backend | None = None,
+) -> None:
+    """Compute DTW distances for all pairs in ``pairs_path``.
+
+    Existing results in ``cache_path`` are reused and only missing ``pair_id``
+    rows are processed.
+    """
+    cat = pd.read_parquet(catalog_path)
+    lookup = cat.set_index(["user_id", "sample_id"])["local_path"].to_dict()
+
+    computed: set[int] = set()
+    if cache_path.exists():
+        computed = set(pd.read_parquet(cache_path)["pair_id"].tolist())
+
+    pf = pq.ParquetFile(pairs_path)
+    records: list[dict] = []
+    offset = 0
+    for batch in pf.iter_batches(batch_size=chunk_size):
+        df = batch.to_pandas()
+        df["pair_id"] = np.arange(offset, offset + len(df))
+        offset += len(df)
+        for row in df.itertuples(index=False):
+            if row.pair_id in computed:
+                continue
+            path_a = Path(lookup[(row.userA, row.sigA)])
+            path_b = Path(lookup[(row.userB, row.sigB)])
+            a = load_local(path_a)
+            b = load_local(path_b)
+            d_raw, n1, n2, n3, plen = compute_pair_dtw(a, b, backend=backend)
+            records.append(
+                {
+                    "pair_id": int(row.pair_id),
+                    "d_raw": d_raw,
+                    "d_norm1": n1,
+                    "d_norm2": n2,
+                    "d_norm3": n3,
+                    "path_len": int(plen),
+                }
+            )
+        if len(records) >= chunk_size:
+            _append_records(records, cache_path)
+            computed.update(r["pair_id"] for r in records)
+            records.clear()
+    if records:
+        _append_records(records, cache_path)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI helper
+    import argparse
+    import pyarrow.parquet as pq
+
+    ap = argparse.ArgumentParser(description="Compute DTW cache")
+    ap.add_argument("pairs", type=Path)
+    ap.add_argument("catalog", type=Path)
+    ap.add_argument("cache", type=Path)
+    ap.add_argument("--chunk-size", type=int, default=10_000)
+    ap.add_argument(
+        "--backend",
+        choices=["cuda", "dtaidistance", "python"],
+        default=None,
+        help="Preferred DTW backend",
+    )
+    args = ap.parse_args()
+
+    build_cache(
+        args.pairs,
+        args.catalog,
+        args.cache,
+        chunk_size=args.chunk_size,
+        backend=args.backend,
+    )
