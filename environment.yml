@@ -19,5 +19,5 @@ dependencies:
   - h5py
   - click
   - yamllint
+  - dtaidistance
 prefix: C:\Users\mattt\miniconda3\envs\DTW-project
-
