@@ -21,7 +21,7 @@ jobs:
         with:
           auto-update-conda: true
           environment-file: environment.yml
-          activate-environment: dtw-project
+          activate-environment: DTW-project
           python-version: 3.11
 
       # 3) (Optional) Upgrade pip / install any extra pip-only packages
