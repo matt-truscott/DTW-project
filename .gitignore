@@ -11,3 +11,7 @@
 
 # Python bytecode
 __pycache__/
+# Runtime artifacts (generated locally, never committed)
+models/*.h5
+figures/*.png
+logs/**
