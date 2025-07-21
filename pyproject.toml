@@ -7,7 +7,7 @@ name = "dtwproject"
 version = "0.1.0"
 requires-python = ">=3.11"
 authors = [
-    { name = "Matt T", email = "matt@example.com" }
+    { name = "Matt Truscott", email = "matttruscott1@gmail.com" }
 ]
 dependencies = [
     "numpy",
