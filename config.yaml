@@ -1,2 +1,2 @@
-GlobalFeatures: data/processed/GlobalFeatures
+GlobalFeatures: data/raw/GlobalFeatures
 LocalFunctions: data/raw/LocalFunctions
