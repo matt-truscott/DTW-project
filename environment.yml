@@ -12,7 +12,7 @@ dependencies:
   - jupyter
   - ipykernel
   - numba
-  - cupy
+  - tensorflow
   - pyarrow
   - scikit-learn
   - pytest
@@ -20,4 +20,3 @@ dependencies:
   - click
   - yamllint
   - dtaidistance
-prefix: C:\Users\mattt\miniconda3\envs\DTW-project
