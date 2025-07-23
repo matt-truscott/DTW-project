@@ -1,11 +1,29 @@
 from pathlib import Path
 import re
 import shutil
+import yaml
 
-# ----- change these two if your layout moves -----
-RAW_ROOT = Path(r"C:\Users\mattt\Skripsie\Projects\DTW-project\data\raw")
-PROC_ROOT = Path(r"C:\Users\mattt\Skripsie\Projects\DTW-project\data\processed")
-# -------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RAW_ROOT = PROJECT_ROOT / "data" / "raw"
+DEFAULT_PROC_ROOT = PROJECT_ROOT / "data" / "processed"
+
+
+def load_paths(config_file: Path | None = None) -> tuple[Path, Path]:
+    """Return RAW_ROOT and PROC_ROOT using ``config.yaml`` if available."""
+    if config_file is None:
+        config_file = PROJECT_ROOT / "config.yaml"
+
+    raw_root = DEFAULT_RAW_ROOT
+    proc_root = DEFAULT_PROC_ROOT
+    if config_file.exists():
+        with open(config_file, "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+        raw_root = Path(cfg.get("raw_root", raw_root)).expanduser()
+        proc_root = Path(cfg.get("processed_root", proc_root)).expanduser()
+    return raw_root, proc_root
+
+
+RAW_ROOT, PROC_ROOT = load_paths()
 
 # Compile one regex to parse   uXXXX_sYYYY_sgZZZZ.mat
 ID_RE = re.compile(

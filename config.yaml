@@ -1,2 +1,4 @@
+raw_root: data/raw
+processed_root: data/processed
 GlobalFeatures: data/raw/GlobalFeatures
 LocalFunctions: data/raw/LocalFunctions
