@@ -42,8 +42,9 @@ def compute_pair_dtw(
     b: np.ndarray,
     *,
     backend: Backend | None = None,
-) -> Tuple[float, float, float, float, int]:
-    """Compute DTW distance and normalised scores for two feature matrices.
+    window: int = 10,
+) -> Tuple[float, float, int, int, int]:
+    """Compute raw and bounded DTW distances for two feature matrices.
 
     Parameters
     ----------
@@ -55,15 +56,15 @@ def compute_pair_dtw(
     Returns
     -------
     d_raw : float
-        Accumulated DTW cost.
-    d_norm1 : float
-        Cost divided by path length.
-    d_norm2 : float
-        Cost divided by the sum of sequence lengths.
-    d_norm3 : float
-        Cost divided by the max of the sequence lengths.
+        Unconstrained DTW cost.
+    d_bound : float
+        DTW cost using a Sakoe-Chiba window of ``window``.
     path_len : int
-        Length of the optimal warping path.
+        Length of the optimal unconstrained warping path.
+    len_a : int
+        Length of the reference sequence.
+    len_b : int
+        Length of the query sequence.
     """
     backend = _select_backend(backend)
 
@@ -72,6 +73,9 @@ def compute_pair_dtw(
         path = _dtw_cuda.warping_path(a.astype(float), b.astype(float))
         d_raw = float(cost[-1, -1])
         path_len = len(path)
+        # bounded distance not implemented for CUDA backend
+        _, cost_b = _dtw_cuda.warping_paths(a.astype(float), b.astype(float), window=window)
+        d_bound = float(cost_b[-1, -1])
     elif backend == "dtaidistance":  # pragma: no cover - requires optional dependency
         x = a.astype(float).T
         y = b.astype(float).T
@@ -79,18 +83,33 @@ def compute_pair_dtw(
         path = dtw_ndim.warping_path(x, y)
         d_raw = float(cost[-1, -1])
         path_len = len(path)
+        _, cost_b = dtw_ndim.warping_paths_fast(x, y, window=window)
+        d_bound = float(cost_b[-1, -1])
     else:
         dist_mat = cdist(a, b)
         path, cost = dp(dist_mat)
         d_raw = float(cost[-1, -1])
         path_len = len(path)
+        d_bound = _bounded_dtw(dist_mat, window)
 
     n_a = len(a)
     n_b = len(b)
-    d_norm1 = d_raw / path_len if path_len else float("inf")
-    d_norm2 = d_raw / (n_a + n_b)
-    d_norm3 = d_raw / max(n_a, n_b)
-    return d_raw, d_norm1, d_norm2, d_norm3, int(path_len)
+    return d_raw, d_bound, int(path_len), int(n_a), int(n_b)
+
+
+def _bounded_dtw(dist_mat: np.ndarray, window: int) -> float:
+    """Simple Sakoe-Chiba band DTW on a precomputed distance matrix."""
+    n, m = dist_mat.shape
+    window = max(window, abs(n - m))
+    cost = np.full((n + 1, m + 1), np.inf)
+    cost[0, 0] = 0.0
+    for i in range(1, n + 1):
+        j_start = max(1, i - window)
+        j_end = min(m, i + window)
+        for j in range(j_start, j_end + 1):
+            d = dist_mat[i - 1, j - 1]
+            cost[i, j] = d + min(cost[i - 1, j], cost[i, j - 1], cost[i - 1, j - 1])
+    return float(cost[n, m])
 
 
 def _append_records(records: Iterable[dict], cache_path: Path) -> None:
@@ -109,6 +128,7 @@ def build_cache(
     *,
     chunk_size: int = 10_000,
     backend: Backend | None = None,
+    window: int = 10,
 ) -> None:
     """Compute DTW distances for all pairs in ``pairs_path``.
 
@@ -136,15 +156,18 @@ def build_cache(
             path_b = Path(lookup[(row.userB, row.sigB)])
             a = load_local(path_a)
             b = load_local(path_b)
-            d_raw, n1, n2, n3, plen = compute_pair_dtw(a, b, backend=backend)
+            d_raw, d_bound, plen, la, lb = compute_pair_dtw(
+                a, b, backend=backend, window=window
+            )
             records.append(
                 {
                     "pair_id": int(row.pair_id),
+                    "label": int(row.label),
                     "d_raw": d_raw,
-                    "d_norm1": n1,
-                    "d_norm2": n2,
-                    "d_norm3": n3,
+                    "d_bound": d_bound,
                     "path_len": int(plen),
+                    "len_ref": int(la),
+                    "len_qry": int(lb),
                 }
             )
         if len(records) >= chunk_size:
@@ -170,6 +193,7 @@ if __name__ == "__main__":  # pragma: no cover - CLI helper
         default=None,
         help="Preferred DTW backend",
     )
+    ap.add_argument("--window", type=int, default=10)
     args = ap.parse_args()
 
     build_cache(
@@ -178,4 +202,5 @@ if __name__ == "__main__":  # pragma: no cover - CLI helper
         args.cache,
         chunk_size=args.chunk_size,
         backend=args.backend,
+        window=args.window,
     )
