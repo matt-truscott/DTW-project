@@ -116,7 +116,6 @@ skilled forgeries.
 ## Project structure
 
 - `src/` – DTW implementation and data utilities
-- `scripts/` – empty placeholders for future helper scripts
 - `notebooks/` – exploratory notebooks
 - `tests/` – simple examples showing how to load data
 
