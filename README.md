@@ -130,3 +130,49 @@ pytest
 
 (Additional dependencies such as `scipy` may be required for the tests to run.)
 
+## End-to-end pipeline
+
+The repository includes lightweight CLI helpers to reproduce the full DTW-based
+signature verification workflow:
+
+1. **Data discovery & integrity check**
+
+   ```bash
+   python -m data.loaders check-integrity
+   ```
+
+   Build `data/catalog.parquet` by scanning the `GlobalFeatures` and
+   `LocalFunctions` directories defined in `config.yaml`.
+
+2. **Pair-list generation**
+
+   ```bash
+   python -m data.pair_builder --out data/pairs.parquet --seed 42
+   ```
+
+   Produce labelled genuine–genuine and genuine–forgery pairs.
+
+3. **Distance-matrix computation**
+
+   ```bash
+   python -m pipeline.compute_dtw --pairs data/pairs.parquet --cache cache/dtw.parquet
+   ```
+
+   Cache classical and windowed DTW distances for every pair.
+
+4. **Score-calibration model training**
+
+   ```bash
+   python -m pipeline.train_regressor --cache cache/dtw.parquet --model models/bounded_dtw.h5
+   ```
+
+   Train a small Keras network on the cached features.
+
+5. **Cross-validation & metric reporting**
+
+   ```bash
+   python -m pipeline.evaluate --model models/bounded_dtw.h5 --folds 5
+   ```
+
+   Output EER and other metrics under `reports/`.
+
