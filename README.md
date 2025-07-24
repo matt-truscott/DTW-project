@@ -137,7 +137,7 @@ signature verification workflow:
 1. **Data discovery & integrity check**
 
    ```bash
-   python -m data.loaders check-integrity
+   python -m data.catalog --config config.yaml
    ```
 
    Build `data/catalog.parquet` by scanning the `GlobalFeatures` and
