@@ -63,10 +63,13 @@ print('Final cost:', cost[-1, -1])
 
 ### Organising the dataset
 
-`src/importData.py` provides a utility to copy `.mat` files into a structured directory tree. The script reads `raw_root` and `processed_root` from `config.yaml` (falling back to `data/raw` and `data/processed`). Adjust these paths if needed and then run:
+`dtwproject.data.import_data` provides a utility to copy `.mat` files into a
+structured directory tree. The script reads `raw_root` and `processed_root` from
+`config.yaml` (falling back to `data/raw` and `data/processed`). Adjust these
+paths if needed and then run:
 
 ```bash
-python src/importData.py
+python -m dtwproject.data.import_data
 ```
 
 ## Data Organization
