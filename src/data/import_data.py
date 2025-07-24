@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 import re
 import shutil
@@ -23,37 +25,46 @@ def load_paths(config_file: Path | None = None) -> tuple[Path, Path]:
     return raw_root, proc_root
 
 
-RAW_ROOT, PROC_ROOT = load_paths()
-
-# Compile one regex to parse   uXXXX_sYYYY_sgZZZZ.mat
 ID_RE = re.compile(
-    r"u(?P<user>\d{4})_?s(?P<session>\d{4})_sg(?P<sample>\d{4})\.mat$",  # underscore optional
+    r"u(?P<user>\d{4})_?s(?P<session>\d{4})_sg(?P<sample>\d{4})\.mat$",
     re.I,
 )
 
-def copy_subset(subfolder: str) -> None:
-    src_dir = RAW_ROOT / subfolder
+
+def copy_subset(
+    subfolder: str,
+    *,
+    raw_root: Path | None = None,
+    processed_root: Path | None = None,
+    config_file: Path | None = None,
+) -> None:
+    """Copy one subset of BiosecurID files into a user-organised tree."""
+    if raw_root is None or processed_root is None:
+        raw_root, processed_root = load_paths(config_file)
+
+    src_dir = raw_root / subfolder
     for mat_path in src_dir.glob("*.mat"):
         m = ID_RE.search(mat_path.name)
         if m is None:
             print(f"[SKIP] Unrecognised filename: {mat_path.name}")
             continue
 
-        user     = f"u{m.group('user')}"
-        dest_dir = PROC_ROOT / user / subfolder        # <── only the user level
+        user = f"u{m.group('user')}"
+        dest_dir = processed_root / user / subfolder
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         dest_file = dest_dir / mat_path.name
         if dest_file.exists():
-            continue                                  # already copied
+            continue
 
         shutil.copy2(mat_path, dest_file)
-        # progress (optional)
-        # print(f"→ {dest_file.relative_to(PROC_ROOT)}")
+
 
 def main() -> None:
+    raw_root, proc_root = load_paths()
     for subset in ("GlobalFeatures", "LocalFunctions"):
-        copy_subset(subset)
+        copy_subset(subset, raw_root=raw_root, processed_root=proc_root)
 
-if __name__ == "__main__":
+
+if __name__ == "__main__":  # pragma: no cover - CLI helper
     main()
