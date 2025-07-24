@@ -4,7 +4,7 @@ import pytest
 import scipy.io as sio
 
 from src.displayData import inspect_mat_file
-from src.dtwAlgorithm import dp
+from src.dtw.core import dp
 
 # helper to construct file paths under tests/data (if present)
 HERE = os.path.dirname(__file__)

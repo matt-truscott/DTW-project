@@ -42,12 +42,12 @@ with h5py.File('file.mat', 'r') as f:
 
 ### Running the DTW algorithm
 
-The core DTW implementation lives in `src/dtwAlgorithm.py` as the `dp` function. Given a distance matrix between two sequences it returns the optimal alignment path and the accumulated cost matrix:
+The core DTW implementation lives in `src/dtw/core.py` as the `dp` function. Given a distance matrix between two sequences it returns the optimal alignment path and the accumulated cost matrix:
 
 ```python
 import numpy as np
 from scipy.spatial.distance import cdist
-from src.dtwAlgorithm import dp
+from src.dtw.core import dp
 
 # Example toy sequences
 a = np.array([1, 2, 3, 4])
