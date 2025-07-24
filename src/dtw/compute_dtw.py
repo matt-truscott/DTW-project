@@ -21,7 +21,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - optional dependency
     _HAVE_CUDA = False
 
-from ..dtwAlgorithm import dp
+from .core import dp
 from ..io.load_biosecurid import load_local
 
 
