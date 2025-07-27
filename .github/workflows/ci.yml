@@ -20,10 +20,10 @@ jobs:
       - uses: conda-incubator/setup-miniconda@v3
         with:
           environment-file: environment.yml        # builds & caches env
-        activate-environment: DTW-project        # auto‑activates in later steps
-        python-version: "3.11"
-        channels: conda-forge                    # optional but explicit
-        auto-update-conda: true
+          activate-environment: DTW-project        # auto‑activates in later steps
+          python-version: "3.11"
+          channels: conda-forge                    # optional but explicit
+          auto-update-conda: true
 
       # 3) (Optional) Upgrade pip / install any extra pip-only packages
       - name: Install extra pip packages
