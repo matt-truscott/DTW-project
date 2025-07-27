@@ -42,12 +42,12 @@ with h5py.File('file.mat', 'r') as f:
 
 ### Running the DTW algorithm
 
-The core DTW implementation lives in `src/dtwAlgorithm.py` as the `dp` function. Given a distance matrix between two sequences it returns the optimal alignment path and the accumulated cost matrix:
+The core DTW implementation lives in `src/dtw/core.py` as the `dp` function. Given a distance matrix between two sequences it returns the optimal alignment path and the accumulated cost matrix:
 
 ```python
 import numpy as np
 from scipy.spatial.distance import cdist
-from src.dtwAlgorithm import dp
+from src.dtw.core import dp
 
 # Example toy sequences
 a = np.array([1, 2, 3, 4])
@@ -63,10 +63,13 @@ print('Final cost:', cost[-1, -1])
 
 ### Organising the dataset
 
-`src/importData.py` provides a utility to copy `.mat` files into a structured directory tree. Update `RAW_ROOT` and `PROC_ROOT` in that script to match your local folder layout and then run:
+`dtwproject.data.import_data` provides a utility to copy `.mat` files into a
+structured directory tree. The script reads `raw_root` and `processed_root` from
+`config.yaml` (falling back to `data/raw` and `data/processed`). Adjust these
+paths if needed and then run:
 
 ```bash
-python src/importData.py
+python -m dtwproject.data.import_data
 ```
 
 ## Data Organization
@@ -116,7 +119,6 @@ skilled forgeries.
 ## Project structure
 
 - `src/` – DTW implementation and data utilities
-- `scripts/` – empty placeholders for future helper scripts
 - `notebooks/` – exploratory notebooks
 - `tests/` – simple examples showing how to load data
 
@@ -138,7 +140,7 @@ signature verification workflow:
 1. **Data discovery & integrity check**
 
    ```bash
-   python -m data.loaders check-integrity
+   python -m data.catalog --config config.yaml
    ```
 
    Build `data/catalog.parquet` by scanning the `GlobalFeatures` and

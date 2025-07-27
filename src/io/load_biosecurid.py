@@ -4,7 +4,6 @@ Module to ingest all BiosecurID .mat files into a single analysis-ready catalog.
 
 import re
 from pathlib import Path
-import pandas as pd
 import scipy.io as sio
 
 # regex to parse filenames like u1001s0001_sg0001.mat
