@@ -6,8 +6,9 @@
 # VS Code settings
 .vscode/
 
-# Only ignore the project’s root data/ folder
-/data/
+# Only ignore the project’s root data/ (processed and raw) folder
+/data/processed/
+/data/raw/
 
 # Python bytecode
 __pycache__/
