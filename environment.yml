@@ -3,20 +3,20 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - pandas
-  - tqdm
   - python=3.11
-  - matplotlib
-  - numpy
-  - pip
-  - jupyter
-  - ipykernel
-  - numba
-  - tensorflow
-  - pyarrow
-  - scikit-learn
-  - pytest
-  - h5py
-  - click
-  - yamllint
   - dtaidistance
+  - numba
+  - ipykernel
+  - tqdm
+  - h5py
+  - scikit-learn
+  - pandas
+  - click
+  - pyarrow
+  - matplotlib
+  - jupyter
+  - pytest
+  - pip
+  - yamllint
+  - seaborn
+prefix: C:\Users\mattt\miniconda3\envs\DTW-project

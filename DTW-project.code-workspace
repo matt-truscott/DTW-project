@@ -5,19 +5,13 @@
         }
     ],
     "settings": {
-        // --- Encoding & line endings ------------------------------------
-        // When you hit Save, VS Code will write UTF‑8 bytes (no BOM).
-        "files.encoding": "utf8",
-
-        // Force LF instead of CRLF to avoid noisy diffs and CI hiccups.
-        // VS Code will warn if a file is CRLF so you can normalise it.
-        "files.eol": "\n",
-
-        // --- Optional: Conda convenience -------------------------------
-        // Auto‑activate the 'DTW-project' env in the integrated terminal.
-        // If you often work in multiple envs, leave this out.
+        // auto-activate the selected conda env in the integrated terminal
         "python.terminal.activateEnvironment": true,
-        "python.condaPath": "${env:CONDA_EXE}",          // already on PATH
-        "python.defaultInterpreterPath": "${workspaceFolder}/.conda/envs/DTW-project/python.exe"
+        
+        // where VS Code should find the `conda` CLI
+        "python.condaPath": "${env:CONDA_EXE}",
+        
+        // **correct** interpreter path for DTW-project in your user envs folder
+        "python.defaultInterpreterPath": "C:\\Users\\mattt\\miniconda3\\envs\\DTW-project\\python.exe"
     }
 }

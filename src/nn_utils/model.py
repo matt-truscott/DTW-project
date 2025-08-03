@@ -2,56 +2,58 @@
 Model utilities for Siamese‐DTW neural extension.
 """
 
-import tensorflow as tf
-from tensorflow.keras.layers import Input, TimeDistributed, Dense, Flatten
-from tensorflow.keras.models import Model
+from keras.models import Model
+from keras.layers import Input, TimeDistributed, Dense
 from src.keras_layers.diff_dtw import DiffDTW
-
-def build_embedding_net(
-    hidden_dims: tuple[int, ...] = (7, 5),
-    input_shape: tuple[int, int] = None
-) -> tf.keras.Model:
-    """
-    Returns a Sequential network mapping (L, F) → (embedding_dim,)
-    where hidden_dims defines the intermediate Dense layers.
-    """
-    layers = []
-    layers.append(Flatten())
-    for dim in hidden_dims:
-        layers.append(Dense(dim, activation="relu"))
-    return tf.keras.Sequential(layers, name="EmbeddingNet")
 
 def build_siamese_dtw_model(
     sequence_length: int,
     n_features: int,
     hidden_dims: tuple[int, ...] = (7, 5),
-    gamma: float = 1.0
-) -> tf.keras.Model:
+    dtw_gamma: float = 1.0,
+    post_hidden: tuple[int, ...] = (16, 8),
+) -> Model:
     """
-    Build & compile a Siamese network with:
-     - Shared embedding net
-     - Differentiable DTW layer
-     - Sigmoid output for binary classification
+    Siamese network with a differentiable DTW layer and post-DTW dense stack,
+    ending in a 2-way softmax.
     """
-    # Define inputs
-    inpA = Input(shape=(sequence_length, n_features), name="inputA")
-    inpB = Input(shape=(sequence_length, n_features), name="inputB")
+    inpA = Input((sequence_length, n_features), name="inputA")
+    inpB = Input((sequence_length, n_features), name="inputB")
 
-    # Shared embedding
-    embed_net = build_embedding_net(hidden_dims, input_shape=(sequence_length, n_features))
-    embA = embed_net(inpA)
-    embB = embed_net(inpB)
+    # time-distributed embedding
+    xA, xB = inpA, inpB
+    for i, dim in enumerate(hidden_dims):
+        td = TimeDistributed(Dense(dim, activation="relu"), name=f"td_dense_{i}")
+        xA, xB = td(xA), td(xB)
 
-    # Differentiable DTW distance
-    dist = DiffDTW(gamma=gamma, name="diffdtw")([embA, embB])
+    # DTW layer
+    dist = DiffDTW(gamma=dtw_gamma, name="diffdtw")([xA, xB])
 
-    # Final sigmoid
-    out = Dense(1, activation="sigmoid", name="output")(dist)
+    # post-DTW stack
+    x = dist
+    for i, dim in enumerate(post_hidden):
+        x = Dense(dim, activation="relu", name=f"post_dtw_dense_{i}")(x)
 
-    model = Model(inputs=[inpA, inpB], outputs=out, name="SiameseDTW")
-    model.compile(
-        optimizer="adam",
-        loss="binary_crossentropy",
-        metrics=["accuracy"]
-    )
+    out = Dense(2, activation="softmax", name="output")(x)
+
+    model = Model([inpA, inpB], out, name="SiameseDTW")
+    model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+    return model
+
+
+def build_baseline_nn(
+    input_dim: int = 18,
+    hidden_dims: tuple[int, ...] = (32, 16),
+) -> Model:
+    """
+    Simple feed-forward network on an 18-dim vector, ending in 2-way softmax.
+    """
+    inp = Input((input_dim,), name="baseline_input")
+    x = inp
+    for i, dim in enumerate(hidden_dims):
+        x = Dense(dim, activation="relu", name=f"baseline_dense_{i}")(x)
+    out = Dense(2, activation="softmax", name="baseline_output")(x)
+
+    model = Model(inp, out, name="BaselineNN")
+    model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
     return model

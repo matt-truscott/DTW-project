@@ -128,3 +128,19 @@ def save_metrics(metrics: dict, out_path: str | Path):
         })
         out_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out_path, index=False)
+
+def dtw_distance(
+    seq_a: np.ndarray,
+    seq_b: np.ndarray
+) -> float:
+    """
+    Classic (non-differentiable) DTW distance between two 2-D sequences.
+    """
+    N, M = len(seq_a), len(seq_b)
+    D = np.full((N+1, M+1), np.inf, dtype=float)
+    D[0, 0] = 0.0
+    for i in range(1, N+1):
+        for j in range(1, M+1):
+            cost = np.linalg.norm(seq_a[i-1] - seq_b[j-1])
+            D[i, j] = cost + min(D[i-1, j], D[i, j-1], D[i-1, j-1])
+    return D[N, M]

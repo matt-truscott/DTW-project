@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+dtwproject.egg-info/PKG-INFO
+dtwproject.egg-info/SOURCES.txt
+dtwproject.egg-info/dependency_links.txt
+dtwproject.egg-info/requires.txt
+dtwproject.egg-info/top_level.txt
+src/__init__.py
+tests/test_compute_dtw.py
+tests/test_diff_dtw.py
+tests/test_inspect_and_dtw.py
