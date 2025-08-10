@@ -1,17 +1,12 @@
 {
-    "folders": [
-        {
-            "path": "."
-        }
-    ],
-    "settings": {
-        // auto-activate the selected conda env in the integrated terminal
-        "python.terminal.activateEnvironment": true,
-        
-        // where VS Code should find the `conda` CLI
-        "python.condaPath": "${env:CONDA_EXE}",
-        
-        // **correct** interpreter path for DTW-project in your user envs folder
-        "python.defaultInterpreterPath": "C:\\Users\\mattt\\miniconda3\\envs\\DTW-project\\python.exe"
+  "folders": [
+    {
+      "path": "."
     }
+  ],
+  "settings": {
+      "python.terminal.activateEnvironment": true,
+      "python.defaultInterpreterPath": "C:\\Users\\mattt\\miniconda3\\envs\\DTW-project\\python.exe",
+      "python.condaPath": "${env:CONDA_EXE}"
+  }
 }
