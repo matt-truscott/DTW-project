@@ -1,40 +1,70 @@
 """
-Utilities for computing DTW distances and caching results.
+Compute DTW distances and cache results.
+
+Supports:
+  (A) Legacy pairwise format: columns [pair_id, pathA, pathB, label]
+  (B) Query→refs format:      [pair_id, path_lf_query, path_lf_refs(list[str]), query_label, user, ...]
 """
 
 from __future__ import annotations
-import sys
+
+# ---- bootstrap: ensure 'src' importable in spawned workers; cap BLAS threads ----
+import os, sys, json
 from pathlib import Path
-from typing import Iterable, Tuple
+
+_THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = _THIS_FILE.parents[2]  # .../Projects/DTW-project
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+os.environ.setdefault("PYTHONPATH", str(PROJECT_ROOT))
+
+# Avoid oversubscription when using multiple processes
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+# ---- stdlib / third-party imports ----
+import math
+from functools import lru_cache
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy.spatial.distance import cdist
-import pyarrow.parquet as pq
 
-# allow running this file directly
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT_ROOT))
-
-# optional high-perf backends
+# Optional high-perf backends
 try:
     from dtaidistance import dtw_ndim
     _HAVE_DTAI = True
-except ImportError:
+except Exception:
     _HAVE_DTAI = False
 
 try:
     import dtw_python_cuda as _dtw_cuda  # type: ignore
     _HAVE_CUDA = True
-except ImportError:
+except Exception:
     _HAVE_CUDA = False
 
 from src.dtw.dtwAlgorithm import dp
 from src.io.load_biosecurid import load_local
 
+# Progress bar (optional)
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None  # graceful fallback
 
 Backend = str
+__all__ = ["build_cache", "compute_pair_dtw"]
 
+# -----------------------------------------------------------------------------
+# DTW kernels
+# -----------------------------------------------------------------------------
+
+def _resolve_project_path(rel: str) -> Path:
+    # accept Windows backslashes or POSIX slashes; join to project root
+    return (PROJECT_ROOT / Path(str(rel).replace("\\", "/"))).resolve()
 
 def _select_backend(preferred: Backend | None = None) -> Backend:
     if preferred == "cuda" and _HAVE_CUDA:
@@ -44,6 +74,24 @@ def _select_backend(preferred: Backend | None = None) -> Backend:
     return "python"
 
 
+def _bounded_dtw(dist_mat: np.ndarray, window: int) -> float:
+    """Sakoe–Chiba band DTW on a precomputed distance matrix."""
+    n, m = dist_mat.shape
+    window = max(window, abs(n - m))
+    cost = np.full((n + 1, m + 1), np.inf)
+    cost[0, 0] = 0.0
+    for i in range(1, n + 1):
+        j0 = max(1, i - window)
+        j1 = min(m, i + window)
+        row = dist_mat[i - 1]
+        ci = cost[i]
+        cim1 = cost[i - 1]
+        for j in range(j0, j1 + 1):
+            d = row[j - 1]
+            ci[j] = d + min(cim1[j], ci[j - 1], cim1[j - 1])
+    return float(cost[n, m])
+
+
 def compute_pair_dtw(
     a: np.ndarray,
     b: np.ndarray,
@@ -51,11 +99,12 @@ def compute_pair_dtw(
     backend: Backend | None = None,
     window: int = 10,
 ) -> Tuple[float, float, int, int, int]:
+    """Return (d_raw, d_bound, path_len, len_a, len_b)."""
     backend = _select_backend(backend)
 
     if backend == "cuda":
         _, cost = _dtw_cuda.warping_paths(a.astype(float), b.astype(float))
-        path  = _dtw_cuda.warping_path(a.astype(float), b.astype(float))
+        path = _dtw_cuda.warping_path(a.astype(float), b.astype(float))
         d_raw = float(cost[-1, -1])
         path_len = len(path)
         _, cost_b = _dtw_cuda.warping_paths(a.astype(float), b.astype(float), window=window)
@@ -64,15 +113,15 @@ def compute_pair_dtw(
     elif backend == "dtaidistance":
         x = a.astype(float)
         y = b.astype(float)
-        _, cost = dtw_ndim.warping_paths_fast(x, y)   # no use_ndim here
-        path  = dtw_ndim.warping_path(x, y)
+        _, cost = dtw_ndim.warping_paths_fast(x, y)
+        path = dtw_ndim.warping_path(x, y)
         d_raw = float(cost[-1, -1])
         path_len = len(path)
         _, cost_b = dtw_ndim.warping_paths_fast(x, y, window=window)
         d_bound = float(cost_b[-1, -1])
 
     else:
-        dist_mat = cdist(a, b)
+        dist_mat = cdist(a, b)  # Euclidean across feature columns
         path, cost = dp(dist_mat)
         d_raw = float(cost[-1, -1])
         path_len = len(path)
@@ -80,109 +129,243 @@ def compute_pair_dtw(
 
     return d_raw, d_bound, path_len, len(a), len(b)
 
+# -----------------------------------------------------------------------------
+# Cached loader per process
+# -----------------------------------------------------------------------------
 
-def _bounded_dtw(dist_mat: np.ndarray, window: int) -> float:
-    """Sakoe–Chiba‐band DTW on a precomputed distance matrix."""
-    n, m = dist_mat.shape
-    window = max(window, abs(n - m))
-    cost = np.full((n+1, m+1), np.inf)
-    cost[0, 0] = 0.0
+@lru_cache(maxsize=4096)
+def _load_local_cached(path: str) -> np.ndarray:
+    abs_path = _resolve_project_path(path)
+    if not abs_path.exists():
+        raise FileNotFoundError(f"Resolved path does not exist: {abs_path} (from '{path}')")
+    return load_local(abs_path)
 
-    for i in range(1, n+1):
-        j0 = max(1, i-window)
-        j1 = min(m, i+window)
-        for j in range(j0, j1+1):
-            d = dist_mat[i-1, j-1]
-            cost[i, j] = d + min(
-                cost[i-1, j],   # insertion
-                cost[i, j-1],   # deletion
-                cost[i-1, j-1]  # match
-            )
+# -----------------------------------------------------------------------------
+# Workers
+# -----------------------------------------------------------------------------
 
-    return float(cost[n, m])
+def _worker_pairwise(task: Dict[str, Any]) -> Dict[str, Any]:
+    pid = int(task["pair_id"])
+    a = _load_local_cached(task["pathA"])
+    b = _load_local_cached(task["pathB"])
+    d_raw, d_bound, plen, la, lb = compute_pair_dtw(a, b, backend=task["backend"], window=task["window"])
+    return {
+        "pair_id": pid,
+        "label": int(task["label"]),
+        "d_raw": d_raw,
+        "d_bound": d_bound,
+        "path_len": plen,
+        "len_A": la,
+        "len_B": lb,
+        "backend": task["backend"] or _select_backend(None),
+        "window": int(task["window"]),
+        "mode": "pairwise",
+    }
 
 
-def _append_records(records: list[dict], cache_path: Path) -> None:
-    df = pd.DataFrame.from_records(records)
-    if cache_path.exists():
-        existing = pd.read_parquet(cache_path)
-        df = pd.concat([existing, df], ignore_index=True)
-    df.to_parquet(cache_path, index=False)
+def _worker_q2refs(task: Dict[str, Any]) -> Dict[str, Any]:
+    pid = int(task["pair_id"])
+    q = _load_local_cached(task["q"])
+    dists: List[float] = []
+    lens_ref: List[int] = []
+    for rp in task["refs"]:
+        r = _load_local_cached(rp)
+        _, d_b, _, _, lr = compute_pair_dtw(q, r, backend=task["backend"], window=task["window"])
+        dists.append(d_b)
+        lens_ref.append(lr)
+    return {
+        "pair_id": pid,
+        "query_label": task["query_label"],  # 'genuine' | 'skilled' | 'random'
+        "scenario": task.get("scenario", "skilled_random"),
+        "split": task.get("split", ""),
+        "d_ref1": dists[0],
+        "d_ref2": dists[1],
+        "d_ref3": dists[2],
+        "d_ref4": dists[3],
+        "d_mean": float(np.mean(dists)),
+        "d_min": float(np.min(dists)),
+        "d_median": float(np.median(dists)),
+        "len_q": len(q),
+        "len_r1": lens_ref[0],
+        "len_r2": lens_ref[1],
+        "len_r3": lens_ref[2],
+        "len_r4": lens_ref[3],
+        "backend": task["backend"] or _select_backend(None),
+        "window": int(task["window"]),
+        "mode": "q2refs",
+    }
 
+# -----------------------------------------------------------------------------
+# Public API
+# -----------------------------------------------------------------------------
 
 def build_cache(
     pairs_path: Path,
     cache_path: Path,
     *,
-    chunk_size: int = 10_000,
-    backend:    Backend | None = None,
-    window:     int = 10,
+    backend: Backend | None = None,
+    window: int = 10,
+    n_jobs: int | None = None,
+    overwrite: bool = False,
+    show_progress: bool = True,
+    progress_every: int = 500,
 ) -> None:
     """
-    Compute DTW distances for all pairs in `pairs_path`.
-    Expects columns [pair_id, ..., pathA, pathB, label].
-    Appends to `cache_path`, skipping existing pair_id.
+    Auto-detect pairs format and compute cache.
+      - Legacy pairwise → [pair_id, label, d_raw, d_bound, ...]
+      - Query→refs      → [pair_id, query_label, d_ref1..4, d_mean, d_min, d_median, ...]
+    Skips pair_ids already present in cache unless overwrite=True.
     """
-    pairs_df = pd.read_parquet(pairs_path)
-    if "pair_id" not in pairs_df.columns:
-        pairs_df["pair_id"] = np.arange(len(pairs_df))
+    pairs_path = Path(pairs_path)
+    cache_path = Path(cache_path)
 
-    done = set()
-    if cache_path.exists():
-        done = set(pd.read_parquet(cache_path)["pair_id"].tolist())
+    df = pd.read_parquet(pairs_path, engine="pyarrow")  # preserve list-typed cols
 
-    records: list[dict] = []
-    for _, row in pairs_df.iterrows():
-        pid = int(row.pair_id)
-        if pid in done:
-            continue
-
-        # load the two sequences
-        a = load_local(Path(row.pathA))
-        b = load_local(Path(row.pathB))
-
-        d_raw, d_bound, plen, la, lb = compute_pair_dtw(
-            a, b, backend=backend, window=window
-        )
-
-        records.append({
-            "pair_id":  pid,
-            "label":    int(row.label),
-            "d_raw":    d_raw,
-            "d_bound":  d_bound,
-            "path_len": plen,
-            "len_ref":  la,
-            "len_qry":  lb,
-        })
-
-        if len(records) >= chunk_size:
-            _append_records(records, cache_path)
-            done.update(r["pair_id"] for r in records)
-            records.clear()
-
-    if records:
-        _append_records(records, cache_path)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    ap = argparse.ArgumentParser(description="Compute DTW cache")
-    ap.add_argument("pairs",  type=Path)
-    ap.add_argument("cache",  type=Path)
-    ap.add_argument("--chunk-size", type=int,   default=10_000)
-    ap.add_argument(
-        "--backend",
-        choices=["cuda","dtaidistance","python"],
-        default=None
+    # After df is loaded and you’ve normalized column name
+    _check_cols = []
+    if {"pathA","pathB"}.issubset(df.columns):
+        _check_cols = ["pathA","pathB"]
+    elif {"path_lf_query","path_lf_refs"}.issubset(df.columns):
+        _check_cols = ["path_lf_query"]  # refs are a list; we’ll catch missing later
+        
+    missing = []
+    for col in _check_cols:
+        for p in df[col].astype(str).head(200):  # sample a few to keep it quick
+            if not _resolve_project_path(p).exists():
+                missing.append(p)
+            break
+        
+    if missing:
+        raise FileNotFoundError(f"At least one path in pairs does not exist when resolved under {PROJECT_ROOT}."
+                                f" First example: {missing[0]}")
+    
+    # NEW: accept protocol column names too
+    if {"path_ref", "path_query"}.issubset(df.columns):
+        df = df.rename(columns={"path_ref": "pathA", "path_query": "pathB"})
+        
+    has_pairwise = {"pathA", "pathB"}.issubset(df.columns)
+    has_q2refs   = {"path_lf_query", "path_lf_refs"}.issubset(df.columns)
+    if not (has_pairwise or has_q2refs):
+        raise ValueError(
+        "Unrecognised pairs file: need either {path_ref,path_query} / {pathA,pathB} "
+        "or {path_lf_query,path_lf_refs}."
     )
-    ap.add_argument("--window", type=int, default=10)
-    args = ap.parse_args()
 
-    build_cache(
-        pairs_path = args.pairs,
-        cache_path = args.cache,
-        chunk_size = args.chunk_size,
-        backend    = args.backend,
-        window     = args.window,
-    )
+    # Ensure pair_id exists and is int
+    if "pair_id" not in df.columns:
+        df = df.reset_index().rename(columns={"index": "pair_id"})
+    df["pair_id"] = df["pair_id"].astype("int64")
+
+    # Skip already-cached
+    if not overwrite and cache_path.exists():
+        done = set(pd.read_parquet(cache_path, engine="pyarrow")["pair_id"].tolist())
+        df = df[~df["pair_id"].isin(done)]
+
+    if df.empty:
+        print("Nothing to do; all pairs already cached.")
+        return
+
+    n_jobs = n_jobs or max(1, os.cpu_count() or 1)
+    tasks: List[Dict[str, Any]] = []
+
+    if has_pairwise:
+        use = df[["pair_id", "pathA", "pathB", "label"]].copy()
+        use["label"] = use["label"].astype("int64")
+        use["pathA"] = use["pathA"].astype(str)
+        use["pathB"] = use["pathB"].astype(str)
+
+        for _, r in use.iterrows():
+            tasks.append({
+                "pair_id": int(r["pair_id"]),
+                "pathA": str(r["pathA"]),
+                "pathB": str(r["pathB"]),
+                "label": int(r["label"]),
+                "backend": backend,
+                "window": window,
+            })
+
+        worker = _worker_pairwise
+        out_cols_order = [
+            "pair_id", "label", "d_raw", "d_bound", "path_len", "len_A", "len_B", "backend", "window", "mode"
+        ]
+
+    else:
+        # Improve locality for ref reuse if 'user' exists
+        sort_cols = [c for c in ["user", "pair_id"] if c in df.columns]
+        if sort_cols:
+            df = df.sort_values(sort_cols)
+
+        use = df[["pair_id", "path_lf_query", "path_lf_refs", "query_label", "scenario", "split"]].copy()
+        use["path_lf_query"] = use["path_lf_query"].astype(str)
+
+        def _coerce_refs(x) -> List[str]:
+            if isinstance(x, list):
+                return [str(p) for p in x]
+            if isinstance(x, tuple):
+                return [str(p) for p in x]
+            if isinstance(x, np.ndarray):
+                return [str(p) for p in x.tolist()]
+            if isinstance(x, (bytes, str)):
+                try:
+                    v = json.loads(x)
+                    if isinstance(v, list):
+                        return [str(p) for p in v]
+                except Exception:
+                    pass
+            raise TypeError(f"Unexpected type for path_lf_refs: {type(x)}")
+
+        use["path_lf_refs"] = use["path_lf_refs"].map(_coerce_refs)
+        bad = use["path_lf_refs"].map(len) != 4
+        if bad.any():
+            raise ValueError(f"Rows without 4 refs: {bad.sum()}")
+
+        for _, r in use.iterrows():
+            tasks.append({
+                "pair_id": int(r["pair_id"]),
+                "q": str(r["path_lf_query"]),
+                "refs": [str(p) for p in r["path_lf_refs"]],
+                "query_label": str(r["query_label"]),
+                "scenario": str(r["scenario"]),
+                "split": str(r["split"]),
+                "backend": backend,
+                "window": window,
+            })
+
+        worker = _worker_q2refs
+        out_cols_order = [
+            "pair_id", "query_label", "scenario", "split",
+            "d_ref1", "d_ref2", "d_ref3", "d_ref4",
+            "d_mean", "d_min", "d_median",
+            "len_q", "len_r1", "len_r2", "len_r3", "len_r4",
+            "backend", "window", "mode"
+        ]
+
+    # ---- Parallel execution with progress ----
+    results: List[Dict[str, Any]] = []
+    backend_name = backend or _select_backend(None)
+    mode = "pairwise" if has_pairwise else "q2refs"
+
+    with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+        futures = [ex.submit(worker, t) for t in tasks]
+
+        if show_progress and tqdm is not None:
+            desc = f"DTW {mode} | backend={backend_name} | w={window} | procs={n_jobs}"
+            iterator = tqdm(as_completed(futures), total=len(futures), unit="pair", desc=desc, leave=True)
+            for f in iterator:
+                results.append(f.result())
+        else:
+            for i, f in enumerate(as_completed(futures), start=1):
+                results.append(f.result())
+                if show_progress and (i % progress_every == 0):
+                    print(f"[DTW {mode}] {i}/{len(futures)} done…")
+
+    # ---- Write out ----
+    df_new = pd.DataFrame.from_records(results)[out_cols_order]
+
+    if cache_path.exists() and not overwrite:
+        df_all = pd.concat([pd.read_parquet(cache_path, engine="pyarrow"), df_new], ignore_index=True)
+    else:
+        df_all = df_new
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df_all.to_parquet(cache_path, index=False, engine="pyarrow")

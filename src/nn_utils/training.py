@@ -5,7 +5,7 @@ Training utilities for Siamese‐DTW neural extension.
 from typing import Tuple
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Model
+from tensorflow.keras import Model
 
 def train_siamese_model(
     model: Model,

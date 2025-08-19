@@ -1,0 +1,13 @@
+{
+  "scenario": "skilled_random",
+  "feature_used": "s_raw",
+  "auc_dev_raw": 0.9230197796103397,
+  "eer_dev_raw": 0.14777777777777779,
+  "auc_dev_cal_holdout": 0.9181890190972224,
+  "eer_dev_cal_holdout": 0.1565104166666667,
+  "thr_dev_cal": 0.34772300528633027,
+  "auc_test_cal": 0.8946959418402777,
+  "eer_test_cal": 0.18895833333333334,
+  "apcer_test_cal": 0.17833333333333334,
+  "bpcer_test_cal": 0.20104166666666667
+}
