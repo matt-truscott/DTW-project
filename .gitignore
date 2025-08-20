@@ -3,6 +3,9 @@
 *.conda
 .conda_envs/
 
+# Python artefacts
+*.egg-info/
+
 # VS Code settings
 .vscode/
 
