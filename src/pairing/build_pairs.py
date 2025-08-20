@@ -1,3 +1,4 @@
+# src/pairing.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -60,10 +61,13 @@ def _load_catalog(project_root: Path) -> pd.DataFrame:
 def _load_splits(project_root: Path) -> tuple[list[int], list[int]]:
     spath = project_root / "data" / "splits" / "user_splits.json"
     if not spath.exists():
-        raise FileNotFoundError(f"Missing splits file: {spath}. Run 02_splits first.")
+        raise FileNotFoundError(f"Missing splits file: {spath}. Run 01_catalog first.")
     payload = json.loads(spath.read_text())
-    dev  = [int(u) for u in payload["dev_users"]]
-    test = [int(u) for u in payload["test_users"]]
+    # Prefer new keys, fall back to old ones
+    dev  = [int(u) for u in payload.get("dev",  payload.get("dev_users",  []))]
+    test = [int(u) for u in payload.get("test", payload.get("test_users", []))]
+    if not dev or not test:
+        raise KeyError("Splits file missing dev/test user lists.")
     return dev, test
 
 def _refs_for_user(dfu: pd.DataFrame) -> Dict[int, str]:
@@ -90,7 +94,7 @@ def _genuine_queries(dfu: pd.DataFrame) -> pd.DataFrame:
     q = dfu[(dfu["session"] != 1) & (dfu["label"] == "genuine")].sort_values(["session", "attempt"])
     if len(q) != 12:
         u = int(dfu["user"].iloc[0]) if len(dfu) else -1
-        raise ValueError(f"User {u}: expected 12 genuine queries (sessions 2–4); got {len}(q)")
+        raise ValueError(f"User {u}: expected 12 genuine queries (sessions 2–4); got {len(q)}")
     return q[["session", "attempt", "path_lf"]]
 
 def _skilled_queries(dfu: pd.DataFrame) -> pd.DataFrame:
@@ -102,6 +106,8 @@ def _skilled_queries(dfu: pd.DataFrame) -> pd.DataFrame:
 
 def _select_impostor_users(all_users_sorted: list[int], user: int, k: int = 12) -> list[int]:
     pool = [u for u in all_users_sorted if u != user]
+    if len(pool) < k:
+        raise ValueError(f"Not enough impostor users in split to select {k}; have {len(pool)}")
     rng = np.random.default_rng(SEED_BASE + int(user))
     idx = rng.choice(len(pool), size=k, replace=False)
     return sorted(pool[i] for i in idx)
@@ -141,6 +147,7 @@ def _expand_pairs_for_case(
                 out.append({
                     "pair_id": _stable_pair_id(split, case, user, ref_attempt, user, q_sess, q_att),
                     "user": int(user),
+                    "ref_user": int(user),
                     "split": split,
                     "case": case,
                     "label": 1,
@@ -163,6 +170,7 @@ def _expand_pairs_for_case(
                 out.append({
                     "pair_id": _stable_pair_id(split, case, user, ref_attempt, user, q_sess, q_att),
                     "user": int(user),
+                    "ref_user": int(user),
                     "split": split,
                     "case": case,
                     "label": 0,
@@ -203,6 +211,7 @@ def _expand_pairs_for_case(
                 out.append({
                     "pair_id": _stable_pair_id(split, case, user, ref_attempt, int(v), q_sess, q_att),
                     "user": int(user),
+                    "ref_user": int(user),
                     "split": split,
                     "case": case,
                     "label": 0,
@@ -220,7 +229,8 @@ def _expand_pairs_for_case(
     return out
 
 def _build_pairs_for_split(df_catalog: pd.DataFrame, users: list[int], split: str) -> dict[str, pd.DataFrame]:
-    users_sorted = sorted(int(u) for u in df_catalog["user"].unique().tolist())
+    # Impostor pool must be within the same split to avoid leakage
+    users_sorted = sorted(int(u) for u in users)
     by_user: Dict[int, pd.DataFrame] = {int(u): df_catalog[df_catalog["user"] == int(u)].copy() for u in users}
 
     out_by_case: dict[str, list[dict]] = {"genuine": [], "skilled": [], "random": []}
@@ -236,8 +246,8 @@ def _build_pairs_for_split(df_catalog: pd.DataFrame, users: list[int], split: st
     for case, dfp in dfs.items():
         if dfp.empty:
             continue
-        int_cols = ["pair_id", "user", "label", "ref_session", "ref_attempt",
-                    "query_user", "query_session", "query_attempt"]
+        int_cols = ["pair_id", "user", "ref_user", "label", "ref_session", "ref_attempt",
+            "query_user", "query_session", "query_attempt"]
         for c in int_cols:
             dfp[c] = dfp[c].astype("int64")
         dfp["split"] = dfp["split"].astype("string")
@@ -281,6 +291,10 @@ def write_pairs_for_splits(
             got = len(dfp)
             if got != expected:
                 raise AssertionError(f"{split}/{case}: expected {expected} rows, got {got}")
+            
+            if not dfp["pair_id"].is_unique:
+                dups = dfp[dfp["pair_id"].duplicated(keep=False)].head(10)
+                raise AssertionError(f"{split}/{case}: duplicate pair_id detected; e.g.\n{dups}")
 
         # Write
         base_dir = (out_dir or (project_root / "data" / "pairs")) / split

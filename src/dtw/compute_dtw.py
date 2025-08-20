@@ -1,11 +1,4 @@
-"""
-Compute DTW distances and cache results.
-
-Supports:
-  (A) Legacy pairwise format: columns [pair_id, pathA, pathB, label]
-  (B) Query→refs format:      [pair_id, path_lf_query, path_lf_refs(list[str]), query_label, user, ...]
-"""
-
+# src/dtw/compute_dtw.py
 from __future__ import annotations
 
 # ---- bootstrap: ensure 'src' importable in spawned workers; cap BLAS threads ----
@@ -13,17 +6,15 @@ import os, sys, json
 from pathlib import Path
 
 _THIS_FILE = Path(__file__).resolve()
-PROJECT_ROOT = _THIS_FILE.parents[2]  # .../Projects/DTW-project
+PROJECT_ROOT = _THIS_FILE.parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("PYTHONPATH", str(PROJECT_ROOT))
 
-# Avoid oversubscription when using multiple processes
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-# ---- stdlib / third-party imports ----
 import math
 from functools import lru_cache
 from typing import Any, Dict, List, Tuple
@@ -33,7 +24,6 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy.spatial.distance import cdist
 
-# Optional high-perf backends
 try:
     from dtaidistance import dtw_ndim
     _HAVE_DTAI = True
@@ -49,21 +39,18 @@ except Exception:
 from src.dtw.dtwAlgorithm import dp
 from src.io.load_biosecurid import load_local
 
-# Progress bar (optional)
 try:
     from tqdm import tqdm
 except Exception:
-    tqdm = None  # graceful fallback
+    tqdm = None
 
 Backend = str
 __all__ = ["build_cache", "compute_pair_dtw"]
 
 # -----------------------------------------------------------------------------
-# DTW kernels
-# -----------------------------------------------------------------------------
+
 
 def _resolve_project_path(rel: str) -> Path:
-    # accept Windows backslashes or POSIX slashes; join to project root
     return (PROJECT_ROOT / Path(str(rel).replace("\\", "/"))).resolve()
 
 def _select_backend(preferred: Backend | None = None) -> Backend:
@@ -73,9 +60,7 @@ def _select_backend(preferred: Backend | None = None) -> Backend:
         return "dtaidistance"
     return "python"
 
-
 def _bounded_dtw(dist_mat: np.ndarray, window: int) -> float:
-    """Sakoe–Chiba band DTW on a precomputed distance matrix."""
     n, m = dist_mat.shape
     window = max(window, abs(n - m))
     cost = np.full((n + 1, m + 1), np.inf)
@@ -91,15 +76,9 @@ def _bounded_dtw(dist_mat: np.ndarray, window: int) -> float:
             ci[j] = d + min(cim1[j], ci[j - 1], cim1[j - 1])
     return float(cost[n, m])
 
-
 def compute_pair_dtw(
-    a: np.ndarray,
-    b: np.ndarray,
-    *,
-    backend: Backend | None = None,
-    window: int = 10,
+    a: np.ndarray, b: np.ndarray, *, backend: Backend | None = None, window: int = 10
 ) -> Tuple[float, float, int, int, int]:
-    """Return (d_raw, d_bound, path_len, len_a, len_b)."""
     backend = _select_backend(backend)
 
     if backend == "cuda":
@@ -111,27 +90,23 @@ def compute_pair_dtw(
         d_bound = float(cost_b[-1, -1])
 
     elif backend == "dtaidistance":
-        x = a.astype(float)
-        y = b.astype(float)
+        x = a.astype(float); y = b.astype(float)
         _, cost = dtw_ndim.warping_paths_fast(x, y)
         path = dtw_ndim.warping_path(x, y)
-        d_raw = float(cost[-1, -1])
-        path_len = len(path)
+        d_raw = float(cost[-1, -1]); path_len = len(path)
         _, cost_b = dtw_ndim.warping_paths_fast(x, y, window=window)
         d_bound = float(cost_b[-1, -1])
 
     else:
-        dist_mat = cdist(a, b)  # Euclidean across feature columns
+        dist_mat = cdist(a, b)
         path, cost = dp(dist_mat)
-        d_raw = float(cost[-1, -1])
-        path_len = len(path)
+        d_raw = float(cost[-1, -1]); path_len = len(path)
         d_bound = _bounded_dtw(dist_mat, window)
 
     return d_raw, d_bound, path_len, len(a), len(b)
 
 # -----------------------------------------------------------------------------
-# Cached loader per process
-# -----------------------------------------------------------------------------
+
 
 @lru_cache(maxsize=4096)
 def _load_local_cached(path: str) -> np.ndarray:
@@ -140,15 +115,24 @@ def _load_local_cached(path: str) -> np.ndarray:
         raise FileNotFoundError(f"Resolved path does not exist: {abs_path} (from '{path}')")
     return load_local(abs_path)
 
-# -----------------------------------------------------------------------------
-# Workers
-# -----------------------------------------------------------------------------
+def _infer_split_case_from_path(p: Path) -> tuple[str, str]:
+    """Infer (split, case) from a pairs file name like 'pairs_dev_genuine.parquet'."""
+    stem = p.stem  # e.g., "pairs_dev_genuine"
+    parts = stem.split("_")
+    if len(parts) >= 3:
+        return parts[1], parts[2]
+    return "", ""
 
 def _worker_pairwise(task: Dict[str, Any]) -> Dict[str, Any]:
     pid = int(task["pair_id"])
     a = _load_local_cached(task["pathA"])
     b = _load_local_cached(task["pathB"])
     d_raw, d_bound, plen, la, lb = compute_pair_dtw(a, b, backend=task["backend"], window=task["window"])
+
+    # Invariant: bounded DTW should never be cheaper than raw
+    if not (d_bound >= d_raw):
+        raise AssertionError(f"Bounded DTW {d_bound:.6f} < raw DTW {d_raw:.6f} for pair_id={pid}")
+
     return {
         "pair_id": pid,
         "label": int(task["label"]),
@@ -160,44 +144,34 @@ def _worker_pairwise(task: Dict[str, Any]) -> Dict[str, Any]:
         "backend": task["backend"] or _select_backend(None),
         "window": int(task["window"]),
         "mode": "pairwise",
+        "split": task.get("split", ""),
+        "case": task.get("case", ""),
     }
-
 
 def _worker_q2refs(task: Dict[str, Any]) -> Dict[str, Any]:
     pid = int(task["pair_id"])
     q = _load_local_cached(task["q"])
-    dists: List[float] = []
-    lens_ref: List[int] = []
+    dists: List[float] = []; lens_ref: List[int] = []
     for rp in task["refs"]:
         r = _load_local_cached(rp)
         _, d_b, _, _, lr = compute_pair_dtw(q, r, backend=task["backend"], window=task["window"])
-        dists.append(d_b)
-        lens_ref.append(lr)
+        dists.append(d_b); lens_ref.append(lr)
     return {
         "pair_id": pid,
-        "query_label": task["query_label"],  # 'genuine' | 'skilled' | 'random'
+        "query_label": task["query_label"],
         "scenario": task.get("scenario", "skilled_random"),
         "split": task.get("split", ""),
-        "d_ref1": dists[0],
-        "d_ref2": dists[1],
-        "d_ref3": dists[2],
-        "d_ref4": dists[3],
-        "d_mean": float(np.mean(dists)),
-        "d_min": float(np.min(dists)),
-        "d_median": float(np.median(dists)),
+        "d_ref1": dists[0], "d_ref2": dists[1], "d_ref3": dists[2], "d_ref4": dists[3],
+        "d_mean": float(np.mean(dists)), "d_min": float(np.min(dists)), "d_median": float(np.median(dists)),
         "len_q": len(q),
-        "len_r1": lens_ref[0],
-        "len_r2": lens_ref[1],
-        "len_r3": lens_ref[2],
-        "len_r4": lens_ref[3],
+        "len_r1": lens_ref[0], "len_r2": lens_ref[1], "len_r3": lens_ref[2], "len_r4": lens_ref[3],
         "backend": task["backend"] or _select_backend(None),
         "window": int(task["window"]),
         "mode": "q2refs",
     }
 
 # -----------------------------------------------------------------------------
-# Public API
-# -----------------------------------------------------------------------------
+
 
 def build_cache(
     pairs_path: Path,
@@ -219,37 +193,50 @@ def build_cache(
     pairs_path = Path(pairs_path)
     cache_path = Path(cache_path)
 
-    df = pd.read_parquet(pairs_path, engine="pyarrow")  # preserve list-typed cols
+    df = pd.read_parquet(pairs_path, engine="pyarrow")
 
-    # After df is loaded and you’ve normalized column name
-    _check_cols = []
-    if {"pathA","pathB"}.issubset(df.columns):
-        _check_cols = ["pathA","pathB"]
-    elif {"path_lf_query","path_lf_refs"}.issubset(df.columns):
-        _check_cols = ["path_lf_query"]  # refs are a list; we’ll catch missing later
-        
-    missing = []
-    for col in _check_cols:
-        for p in df[col].astype(str).head(200):  # sample a few to keep it quick
-            if not _resolve_project_path(p).exists():
-                missing.append(p)
-            break
-        
-    if missing:
-        raise FileNotFoundError(f"At least one path in pairs does not exist when resolved under {PROJECT_ROOT}."
-                                f" First example: {missing[0]}")
-    
-    # NEW: accept protocol column names too
+    # Normalize column names FIRST so detection & checks are consistent
     if {"path_ref", "path_query"}.issubset(df.columns):
         df = df.rename(columns={"path_ref": "pathA", "path_query": "pathB"})
-        
+
     has_pairwise = {"pathA", "pathB"}.issubset(df.columns)
     has_q2refs   = {"path_lf_query", "path_lf_refs"}.issubset(df.columns)
     if not (has_pairwise or has_q2refs):
         raise ValueError(
-        "Unrecognised pairs file: need either {path_ref,path_query} / {pathA,pathB} "
-        "or {path_lf_query,path_lf_refs}."
-    )
+            "Unrecognised pairs file: need either {path_ref,path_query}/{pathA,pathB} "
+            "or {path_lf_query,path_lf_refs}."
+        )
+
+    # Infer split/case for pairwise files from filename; q2refs already carries split/scenario
+    if has_pairwise:
+        split_inf, case_inf = _infer_split_case_from_path(pairs_path)
+    else:
+        split_inf, case_inf = "", ""
+
+    # Lightweight path existence check on a sample
+    sample_idx = df.index if len(df) <= 100 else df.sample(100, random_state=0).index
+    if has_pairwise:
+        _cols = ["pathA", "pathB"]
+        for col in _cols:
+            for p in df.loc[sample_idx, col].astype(str):
+                if not _resolve_project_path(p).exists():
+                    raise FileNotFoundError(
+                        f"Path in column '{col}' does not exist under {PROJECT_ROOT}: {p}"
+                    )
+    else:
+        for p in df.loc[sample_idx, "path_lf_query"].astype(str):
+            if not _resolve_project_path(p).exists():
+                raise FileNotFoundError(f"Query path does not exist under {PROJECT_ROOT}: {p}")
+        # refs is a list-like; check the first row's 4 refs thoroughly
+        first_refs = df["path_lf_refs"].iloc[0]
+        if isinstance(first_refs, (str, bytes)):
+            try:
+                first_refs = json.loads(first_refs)
+            except Exception:
+                pass
+        for rp in list(first_refs)[:4]:
+            if not _resolve_project_path(str(rp)).exists():
+                raise FileNotFoundError(f"Ref path does not exist under {PROJECT_ROOT}: {rp}")
 
     # Ensure pair_id exists and is int
     if "pair_id" not in df.columns:
@@ -260,10 +247,9 @@ def build_cache(
     if not overwrite and cache_path.exists():
         done = set(pd.read_parquet(cache_path, engine="pyarrow")["pair_id"].tolist())
         df = df[~df["pair_id"].isin(done)]
-
-    if df.empty:
-        print("Nothing to do; all pairs already cached.")
-        return
+        if df.empty:
+            print("Nothing to do; all pairs already cached.")
+            return
 
     n_jobs = n_jobs or max(1, os.cpu_count() or 1)
     tasks: List[Dict[str, Any]] = []
@@ -282,15 +268,17 @@ def build_cache(
                 "label": int(r["label"]),
                 "backend": backend,
                 "window": window,
+                "split": split_inf,
+                "case": case_inf,
             })
 
         worker = _worker_pairwise
         out_cols_order = [
-            "pair_id", "label", "d_raw", "d_bound", "path_len", "len_A", "len_B", "backend", "window", "mode"
+            "pair_id", "label", "d_raw", "d_bound", "path_len", "len_A", "len_B",
+            "backend", "window", "mode", "split", "case"
         ]
 
     else:
-        # Improve locality for ref reuse if 'user' exists
         sort_cols = [c for c in ["user", "pair_id"] if c in df.columns]
         if sort_cols:
             df = df.sort_values(sort_cols)
@@ -299,12 +287,9 @@ def build_cache(
         use["path_lf_query"] = use["path_lf_query"].astype(str)
 
         def _coerce_refs(x) -> List[str]:
-            if isinstance(x, list):
-                return [str(p) for p in x]
-            if isinstance(x, tuple):
-                return [str(p) for p in x]
-            if isinstance(x, np.ndarray):
-                return [str(p) for p in x.tolist()]
+            if isinstance(x, list):   return [str(p) for p in x]
+            if isinstance(x, tuple):  return [str(p) for p in x]
+            if isinstance(x, np.ndarray): return [str(p) for p in x.tolist()]
             if isinstance(x, (bytes, str)):
                 try:
                     v = json.loads(x)
@@ -340,18 +325,15 @@ def build_cache(
             "backend", "window", "mode"
         ]
 
-    # ---- Parallel execution with progress ----
     results: List[Dict[str, Any]] = []
     backend_name = backend or _select_backend(None)
     mode = "pairwise" if has_pairwise else "q2refs"
 
     with ProcessPoolExecutor(max_workers=n_jobs) as ex:
         futures = [ex.submit(worker, t) for t in tasks]
-
         if show_progress and tqdm is not None:
             desc = f"DTW {mode} | backend={backend_name} | w={window} | procs={n_jobs}"
-            iterator = tqdm(as_completed(futures), total=len(futures), unit="pair", desc=desc, leave=True)
-            for f in iterator:
+            for f in tqdm(as_completed(futures), total=len(futures), unit="pair", desc=desc, leave=True):
                 results.append(f.result())
         else:
             for i, f in enumerate(as_completed(futures), start=1):
@@ -359,7 +341,6 @@ def build_cache(
                 if show_progress and (i % progress_every == 0):
                     print(f"[DTW {mode}] {i}/{len(futures)} done…")
 
-    # ---- Write out ----
     df_new = pd.DataFrame.from_records(results)[out_cols_order]
 
     if cache_path.exists() and not overwrite:
@@ -368,4 +349,5 @@ def build_cache(
         df_all = df_new
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    df_all.to_parquet(cache_path, index=False, engine="pyarrow")
+    # Use compression for smaller/faster I/O
+    df_all.to_parquet(cache_path, index=False, engine="pyarrow", compression="zstd")

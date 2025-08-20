@@ -1,4 +1,4 @@
-"""Build an analysis-ready catalog + deterministic user splits for BiosecurID."""
+""""Build an analysis-ready catalog + deterministic user splits for BiosecurID."""
 
 from __future__ import annotations
 
@@ -83,7 +83,9 @@ def build_catalog(
     per *attempt* based on LocalFunctions files.
 
     Output columns:
-        path_gf, path_lf, user, session, attempt, label, n_rows_lf, n_cols_lf
+        path_gf, path_lf, user, session, attempt, label,
+        n_rows_lf, n_cols_lf,
+        sig_name, has_gf
     """
     processed_root = Path(processed_root)
     rows: list[dict] = []
@@ -115,6 +117,8 @@ def build_catalog(
                     label=label,
                     n_rows_lf=n_rows,
                     n_cols_lf=n_cols,
+                    sig_name=lf_path.stem,     # e.g., u1001s0001_sg0001
+                    has_gf=bool(gf_path.exists()),
                 )
             )
 
@@ -139,7 +143,7 @@ def make_splits(df: pd.DataFrame, out_json: Path) -> tuple[list[int], list[int]]
     dev  = users[:300]
     test = users[300:400]
 
-    payload = {"dev_users": dev, "test_users": test}
+    payload = {"dev": dev, "test": test}
     out_json = Path(out_json)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(payload, indent=2))
