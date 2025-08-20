@@ -249,5 +249,3 @@ print(float(cost[-1, -1]))
 
 * Code is provided for academic use.
 * **BiosecurID** data is not included; ensure you have the right to access and process it.
-
-**Enjoy the pipeline!** If you get stuck (pairing rules, DTW caching, Siamese training), open an issue—happy to help tune configs or extend the evaluation.
